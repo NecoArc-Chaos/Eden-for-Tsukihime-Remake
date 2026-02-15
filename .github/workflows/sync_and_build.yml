@@ -6,8 +6,6 @@ on:
       - main
       - master
   workflow_dispatch:
-  schedule:
-    - cron: '0 0 * * *'
 
 jobs:
   # --- Android ARM64 Build ---
@@ -20,53 +18,44 @@ jobs:
           submodules: recursive
           fetch-depth: 0
 
-      - name: Install Build Dependencies (Ubuntu)
+      - name: Install Build Dependencies
         run: |
           sudo apt-get update
-          # 安装 glslangValidator 以及其他可能的必要编译工具
           sudo apt-get install -y glslang-tools ccache
 
-      - name: Sync and Patch (Android)
+      - name: Sync and Precise Patch (Android)
         shell: python
         run: |
-          import subprocess, os
-          # 同步上游代码
+          import os, subprocess, re
+
+          # 1. 同步上游
           subprocess.run(["git", "remote", "add", "upstream", "https://git.eden-emu.dev/eden-emu/eden.git"])
           subprocess.run(["git", "fetch", "upstream"])
           subprocess.run(["git", "reset", "--hard", "upstream/master"])
-          
+
           file_path = 'src/video_core/texture_cache/util.cpp'
-          if not os.path.exists(file_path):
-              print(f"Error: {file_path} not found!")
-              exit(1)
-
           with open(file_path, 'r', encoding='utf-8') as f:
-              content = f.read()
+              lines = f.readlines()
 
-          # 修改 1: 简化 .depth 赋值 (精确匹配)
-          content = content.replace(
-              '.depth = level == 0 && num_levels == 1 ? block_size.depth : AdjustMipBlockSize<GOB_SIZE_Z>(num_tiles.depth, block_size.depth, level),',
-              '.depth = AdjustMipBlockSize<GOB_SIZE_Z>(num_tiles.depth, block_size.depth, level),'
-          )
+          # --- 修改 1: 处理 .depth 赋值 (处理可能的多行情况) ---
+          content = "".join(lines)
+          # 匹配包含 level == 0 && num_levels == 1 的那个三元运算块
+          depth_pattern = r'\.depth = level == 0 && num_levels == 1\s*\?\s*block_size\.depth\s*:\s*AdjustMipBlockSize<GOB_SIZE_Z>\(num_tiles\.depth, block_size\.depth, level\),'
+          content = re.sub(depth_pattern, '.depth = AdjustMipBlockSize<GOB_SIZE_Z>(num_tiles.depth, block_size.depth, level),', content)
 
-          # 修改 2: 移除 TileShift 内部多余判断
-          content = content.replace(
-              'if (level == 0 && info.num_levels == 1) { return info.block_size; }',
-              ''
-          )
+          # --- 修改 2: 彻底删除 TileShift 内部的 if 块 ---
+          # 匹配 if (level == 0 && info.num_levels == 1) 直到其闭合大括号
+          tileshift_if_pattern = r'if \(level == 0 && info\.num_levels == 1\) \{[\s\S]*?\.depth = info\.block\.depth,[\s\S]*?\}'
+          content = re.sub(tileshift_if_pattern, '', content)
 
-          # 修改 3: 修正 static_assert 语法
-          old_assert_1 = "static_assert(CalculateLevelSize(LevelInfo{{32, 32, 1}, {0, 0, 4}, {1, 1}, 4, 0, 1}, 0) == 0x40000);"
-          old_assert_2 = "static_assert(CalculateLevelSize(LevelInfo{{128, 8, 1}, {0, 4, 0}, {1, 1}, 4, 0, 1}, 0) == 0x40000);"
-          new_assert_1 = "static_assert(CalculateLevelSize(LevelInfo{{32, 32, 1}, {0, 0, 4}, {1, 1}, 4, 0}, 0) == 0x4000);"
-          new_assert_2 = "static_assert(CalculateLevelSize(LevelInfo{{128, 8, 1}, {0, 4, 0}, {1, 1}, 4, 0}, 0) == 0x4000);"
-          
-          content = content.replace(old_assert_1, new_assert_1)
-          content = content.replace(old_assert_2, new_assert_2)
+          # --- 修改 3: 替换 static_assert ---
+          # 匹配那两行 0x40000 的断言
+          assert_pattern = r'static_assert\(CalculateLevelSize\(LevelInfo\{\{32, 32, 1\}, \{0, 0, 4\}, \{1, 1\}, 4, 0, 1\}, 0\) == 0x40000\);\s*static_assert\(CalculateLevelSize\(LevelInfo\{\{128, 8, 1\}, \{0, 4, 0\}, \{1, 1\}, 4, 0, 1\}, 0\) == 0x40000\);'
+          content = re.sub(assert_pattern, 'static_assert(CalculateLevelSize(LevelInfo{{32, 32, 1}, {0, 0, 4}, {1, 1}, 4, 0}, 0) == 0x4000);', content)
 
           with open(file_path, 'w', encoding='utf-8') as f:
               f.write(content)
-          print("Android Patch Applied Successfully.")
+          print("Precise patch applied successfully.")
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -78,8 +67,8 @@ jobs:
         run: |
           chmod +x .ci/android/build.sh
           export ANDROID_SDK_ROOT=$ANDROID_HOME
-          # 传递 Vulkan 头文件路径
           VULKAN_HEADERS="$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include"
+          # 使用修正后的 -D 语法
           .ci/android/build.sh -r -t standard -b Release -DYUZU_ANDROID_ARGS="-DANDROID_ABI=arm64-v8a -DVulkan_INCLUDE_DIR=$VULKAN_HEADERS -DVulkan_HEADERS_INSTALL_DIR=$VULKAN_HEADERS"
 
       - name: Upload APK
@@ -97,25 +86,24 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Sync and Patch (Windows)
+      - name: Sync and Precise Patch (Windows)
         shell: python
         run: |
-          import subprocess, os
+          import os, subprocess, re
           subprocess.run(["git", "remote", "add", "upstream", "https://git.eden-emu.dev/eden-emu/eden.git"])
           subprocess.run(["git", "fetch", "upstream"])
           subprocess.run(["git", "reset", "--hard", "upstream/master"])
-          
+
           file_path = 'src/video_core/texture_cache/util.cpp'
           with open(file_path, 'r', encoding='utf-8') as f:
               content = f.read()
-          
-          content = content.replace('.depth = level == 0 && num_levels == 1 ? block_size.depth : AdjustMipBlockSize<GOB_SIZE_Z>(num_tiles.depth, block_size.depth, level),', '.depth = AdjustMipBlockSize<GOB_SIZE_Z>(num_tiles.depth, block_size.depth, level),')
-          content = content.replace('if (level == 0 && info.num_levels == 1) { return info.block_size; }', '')
-          
-          old_assert_1 = "static_assert(CalculateLevelSize(LevelInfo{{32, 32, 1}, {0, 0, 4}, {1, 1}, 4, 0, 1}, 0) == 0x40000);"
-          old_assert_2 = "static_assert(CalculateLevelSize(LevelInfo{{128, 8, 1}, {0, 4, 0}, {1, 1}, 4, 0, 1}, 0) == 0x40000);"
-          content = content.replace(old_assert_1, "static_assert(CalculateLevelSize(LevelInfo{{32, 32, 1}, {0, 0, 4}, {1, 1}, 4, 0}, 0) == 0x4000);")
-          content = content.replace(old_assert_2, "static_assert(CalculateLevelSize(LevelInfo{{128, 8, 1}, {0, 4, 0}, {1, 1}, 4, 0}, 0) == 0x4000);")
+
+          # 修改 1
+          content = re.sub(r'\.depth = level == 0 && num_levels == 1\s*\?\s*block_size\.depth\s*:\s*AdjustMipBlockSize<GOB_SIZE_Z>\(num_tiles\.depth, block_size\.depth, level\),', '.depth = AdjustMipBlockSize<GOB_SIZE_Z>(num_tiles.depth, block_size.depth, level),', content)
+          # 修改 2
+          content = re.sub(r'if \(level == 0 && info\.num_levels == 1\) \{[\s\S]*?\.depth = info\.block\.depth,[\s\S]*?\}', '', content)
+          # 修改 3
+          content = re.sub(r'static_assert\(CalculateLevelSize\(LevelInfo\{\{32, 32, 1\}, \{0, 0, 4\}, \{1, 1\}, 4, 0, 1\}, 0\) == 0x40000\);\s*static_assert\(CalculateLevelSize\(LevelInfo\{\{128, 8, 1\}, \{0, 4, 0\}, \{1, 1\}, 4, 0, 1\}, 0\) == 0x40000\);', 'static_assert(CalculateLevelSize(LevelInfo{{32, 32, 1}, {0, 0, 4}, {1, 1}, 4, 0}, 0) == 0x4000);', content)
 
           with open(file_path, 'w', encoding='utf-8') as f:
               f.write(content)
