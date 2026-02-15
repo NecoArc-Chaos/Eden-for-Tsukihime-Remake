@@ -23,39 +23,49 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y glslang-tools ccache
 
-      - name: Sync and Precise Patch (Android)
+      - name: Sync and Surgical Patch (Android)
         shell: python
         run: |
-          import os, subprocess, re
+          import os, subprocess
 
-          # 1. 同步上游
+          # 1. 同步并重置到最新上游
           subprocess.run(["git", "remote", "add", "upstream", "https://git.eden-emu.dev/eden-emu/eden.git"])
           subprocess.run(["git", "fetch", "upstream"])
           subprocess.run(["git", "reset", "--hard", "upstream/master"])
 
           file_path = 'src/video_core/texture_cache/util.cpp'
           with open(file_path, 'r', encoding='utf-8') as f:
-              lines = f.readlines()
+              content = f.read()
 
-          # --- 修改 1: 处理 .depth 赋值 (处理可能的多行情况) ---
-          content = "".join(lines)
-          # 匹配包含 level == 0 && num_levels == 1 的那个三元运算块
-          depth_pattern = r'\.depth = level == 0 && num_levels == 1\s*\?\s*block_size\.depth\s*:\s*AdjustMipBlockSize<GOB_SIZE_Z>\(num_tiles\.depth, block_size\.depth, level\),'
-          content = re.sub(depth_pattern, '.depth = AdjustMipBlockSize<GOB_SIZE_Z>(num_tiles.depth, block_size.depth, level),', content)
+          # --- 修改 1: .depth 赋值 (精确匹配原始多行缩进) ---
+          old_depth = """.depth = level == 0 && num_levels == 1
+                     ? block_size.depth
+                     : AdjustMipBlockSize<GOB_SIZE_Z>(num_tiles.depth, block_size.depth, level),"""
+          new_depth = ".depth = AdjustMipBlockSize<GOB_SIZE_Z>(num_tiles.depth, block_size.depth, level),"
+          content = content.replace(old_depth, new_depth)
 
-          # --- 修改 2: 彻底删除 TileShift 内部的 if 块 ---
-          # 匹配 if (level == 0 && info.num_levels == 1) 直到其闭合大括号
-          tileshift_if_pattern = r'if \(level == 0 && info\.num_levels == 1\) \{[\s\S]*?\.depth = info\.block\.depth,[\s\S]*?\}'
-          content = re.sub(tileshift_if_pattern, '', content)
+          # --- 修改 2: 删除 TileShift 内部的 if 块 (精确匹配原始代码块) ---
+          old_if_block = """    if (level == 0 && info.num_levels == 1) {
+        return Extent3D{
+            .width = info.block.width,
+            .height = info.block.height,
+            .depth = info.block.depth,
+        };
+    }"""
+          # 替换为空字符串，保留外部的 [[nodiscard]] constexpr Extent3D TileShift 和后续 return
+          content = content.replace(old_if_block, "")
 
-          # --- 修改 3: 替换 static_assert ---
-          # 匹配那两行 0x40000 的断言
-          assert_pattern = r'static_assert\(CalculateLevelSize\(LevelInfo\{\{32, 32, 1\}, \{0, 0, 4\}, \{1, 1\}, 4, 0, 1\}, 0\) == 0x40000\);\s*static_assert\(CalculateLevelSize\(LevelInfo\{\{128, 8, 1\}, \{0, 4, 0\}, \{1, 1\}, 4, 0, 1\}, 0\) == 0x40000\);'
-          content = re.sub(assert_pattern, 'static_assert(CalculateLevelSize(LevelInfo{{32, 32, 1}, {0, 0, 4}, {1, 1}, 4, 0}, 0) == 0x4000);', content)
+          # --- 修改 3: 替换 static_assert (精确匹配 1310~1312 行) ---
+          old_asserts = """static_assert(CalculateLevelSize(LevelInfo{{32, 32, 1}, {0, 0, 4}, {1, 1}, 4, 0, 1}, 0) == 0x40000);
+
+static_assert(CalculateLevelSize(LevelInfo{{128, 8, 1}, {0, 4, 0}, {1, 1}, 4, 0, 1}, 0) == 0x40000);"""
+          new_assert = "static_assert(CalculateLevelSize(LevelInfo{{32, 32, 1}, {0, 0, 4}, {1, 1}, 4, 0}, 0) == 0x4000);"
+          content = content.replace(old_asserts, new_assert)
 
           with open(file_path, 'w', encoding='utf-8') as f:
               f.write(content)
-          print("Precise patch applied successfully.")
+          
+          print("SUCCESS: Surgical patch applied using exact string matching.")
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -68,7 +78,6 @@ jobs:
           chmod +x .ci/android/build.sh
           export ANDROID_SDK_ROOT=$ANDROID_HOME
           VULKAN_HEADERS="$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include"
-          # 使用修正后的 -D 语法
           .ci/android/build.sh -r -t standard -b Release -DYUZU_ANDROID_ARGS="-DANDROID_ABI=arm64-v8a -DVulkan_INCLUDE_DIR=$VULKAN_HEADERS -DVulkan_HEADERS_INSTALL_DIR=$VULKAN_HEADERS"
 
       - name: Upload APK
@@ -86,10 +95,10 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Sync and Precise Patch (Windows)
+      - name: Sync and Surgical Patch (Windows)
         shell: python
         run: |
-          import os, subprocess, re
+          import os, subprocess
           subprocess.run(["git", "remote", "add", "upstream", "https://git.eden-emu.dev/eden-emu/eden.git"])
           subprocess.run(["git", "fetch", "upstream"])
           subprocess.run(["git", "reset", "--hard", "upstream/master"])
@@ -98,12 +107,24 @@ jobs:
           with open(file_path, 'r', encoding='utf-8') as f:
               content = f.read()
 
-          # 修改 1
-          content = re.sub(r'\.depth = level == 0 && num_levels == 1\s*\?\s*block_size\.depth\s*:\s*AdjustMipBlockSize<GOB_SIZE_Z>\(num_tiles\.depth, block_size\.depth, level\),', '.depth = AdjustMipBlockSize<GOB_SIZE_Z>(num_tiles.depth, block_size.depth, level),', content)
-          # 修改 2
-          content = re.sub(r'if \(level == 0 && info\.num_levels == 1\) \{[\s\S]*?\.depth = info\.block\.depth,[\s\S]*?\}', '', content)
-          # 修改 3
-          content = re.sub(r'static_assert\(CalculateLevelSize\(LevelInfo\{\{32, 32, 1\}, \{0, 0, 4\}, \{1, 1\}, 4, 0, 1\}, 0\) == 0x40000\);\s*static_assert\(CalculateLevelSize\(LevelInfo\{\{128, 8, 1\}, \{0, 4, 0\}, \{1, 1\}, 4, 0, 1\}, 0\) == 0x40000\);', 'static_assert(CalculateLevelSize(LevelInfo{{32, 32, 1}, {0, 0, 4}, {1, 1}, 4, 0}, 0) == 0x4000);', content)
+          # 修改 1 (同上)
+          content = content.replace(""".depth = level == 0 && num_levels == 1
+                     ? block_size.depth
+                     : AdjustMipBlockSize<GOB_SIZE_Z>(num_tiles.depth, block_size.depth, level),""", ".depth = AdjustMipBlockSize<GOB_SIZE_Z>(num_tiles.depth, block_size.depth, level),")
+          
+          # 修改 2 (同上)
+          content = content.replace("""    if (level == 0 && info.num_levels == 1) {
+        return Extent3D{
+            .width = info.block.width,
+            .height = info.block.height,
+            .depth = info.block.depth,
+        };
+    }""", "")
+          
+          # 修改 3 (同上)
+          content = content.replace("""static_assert(CalculateLevelSize(LevelInfo{{32, 32, 1}, {0, 0, 4}, {1, 1}, 4, 0, 1}, 0) == 0x40000);
+
+static_assert(CalculateLevelSize(LevelInfo{{128, 8, 1}, {0, 4, 0}, {1, 1}, 4, 0, 1}, 0) == 0x40000);""", "static_assert(CalculateLevelSize(LevelInfo{{32, 32, 1}, {0, 0, 4}, {1, 1}, 4, 0}, 0) == 0x4000);")
 
           with open(file_path, 'w', encoding='utf-8') as f:
               f.write(content)
