@@ -20,11 +20,17 @@ jobs:
           submodules: recursive
           fetch-depth: 0
 
+      - name: Install Build Dependencies (Ubuntu)
+        run: |
+          sudo apt-get update
+          # 安装 glslangValidator 以及其他可能的必要编译工具
+          sudo apt-get install -y glslang-tools ccache
+
       - name: Sync and Patch (Android)
         shell: python
         run: |
           import subprocess, os
-          # 1. 同步上游代码
+          # 同步上游代码
           subprocess.run(["git", "remote", "add", "upstream", "https://git.eden-emu.dev/eden-emu/eden.git"])
           subprocess.run(["git", "fetch", "upstream"])
           subprocess.run(["git", "reset", "--hard", "upstream/master"])
@@ -37,7 +43,7 @@ jobs:
           with open(file_path, 'r', encoding='utf-8') as f:
               content = f.read()
 
-          # 修改 1: 简化 .depth 计算逻辑 (精确匹配)
+          # 修改 1: 简化 .depth 赋值 (精确匹配)
           content = content.replace(
               '.depth = level == 0 && num_levels == 1 ? block_size.depth : AdjustMipBlockSize<GOB_SIZE_Z>(num_tiles.depth, block_size.depth, level),',
               '.depth = AdjustMipBlockSize<GOB_SIZE_Z>(num_tiles.depth, block_size.depth, level),'
@@ -49,11 +55,9 @@ jobs:
               ''
           )
 
-          # 修改 3: 修正 static_assert 语法错误 (这是报错的根源)
-          # 我们把原本两个复杂的 assert 替换为两个简单的 assert
+          # 修改 3: 修正 static_assert 语法
           old_assert_1 = "static_assert(CalculateLevelSize(LevelInfo{{32, 32, 1}, {0, 0, 4}, {1, 1}, 4, 0, 1}, 0) == 0x40000);"
           old_assert_2 = "static_assert(CalculateLevelSize(LevelInfo{{128, 8, 1}, {0, 4, 0}, {1, 1}, 4, 0, 1}, 0) == 0x40000);"
-          
           new_assert_1 = "static_assert(CalculateLevelSize(LevelInfo{{32, 32, 1}, {0, 0, 4}, {1, 1}, 4, 0}, 0) == 0x4000);"
           new_assert_2 = "static_assert(CalculateLevelSize(LevelInfo{{128, 8, 1}, {0, 4, 0}, {1, 1}, 4, 0}, 0) == 0x4000);"
           
@@ -74,7 +78,7 @@ jobs:
         run: |
           chmod +x .ci/android/build.sh
           export ANDROID_SDK_ROOT=$ANDROID_HOME
-          # 增加 Vulkan 头文件路径指引
+          # 传递 Vulkan 头文件路径
           VULKAN_HEADERS="$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include"
           .ci/android/build.sh -r -t standard -b Release -DYUZU_ANDROID_ARGS="-DANDROID_ABI=arm64-v8a -DVulkan_INCLUDE_DIR=$VULKAN_HEADERS -DVulkan_HEADERS_INSTALL_DIR=$VULKAN_HEADERS"
 
@@ -105,7 +109,6 @@ jobs:
           with open(file_path, 'r', encoding='utf-8') as f:
               content = f.read()
           
-          # 同样使用精确匹配替换，确保 Win/Android 一致
           content = content.replace('.depth = level == 0 && num_levels == 1 ? block_size.depth : AdjustMipBlockSize<GOB_SIZE_Z>(num_tiles.depth, block_size.depth, level),', '.depth = AdjustMipBlockSize<GOB_SIZE_Z>(num_tiles.depth, block_size.depth, level),')
           content = content.replace('if (level == 0 && info.num_levels == 1) { return info.block_size; }', '')
           
