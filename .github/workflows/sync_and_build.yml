@@ -24,6 +24,7 @@ jobs:
         shell: python
         run: |
           import re, subprocess, os
+          # 1. 同步最新上游代码
           subprocess.run(["git", "remote", "add", "upstream", "https://git.eden-emu.dev/eden-emu/eden.git"])
           subprocess.run(["git", "fetch", "upstream"])
           subprocess.run(["git", "reset", "--hard", "upstream/master"])
@@ -36,19 +37,23 @@ jobs:
           with open(file_path, 'r', encoding='utf-8') as f:
               content = f.read()
 
+          # 修改 1: .depth 赋值逻辑
           old_depth = r"\.depth = level == 0 && num_levels == 1\s*\?\s*block_size\.depth\s*:\s*AdjustMipBlockSize<GOB_SIZE_Z>\(num_tiles\.depth, block_size\.depth, level\),"
           new_depth = ".depth = AdjustMipBlockSize<GOB_SIZE_Z>(num_tiles.depth, block_size.depth, level),"
           content = re.sub(old_depth, new_depth, content)
 
+          # 修改 2: 删除 TileShift 内部的 if 块 (保留函数头)
           old_tileshift = r"(constexpr Extent3D TileShift\(const LevelInfo& info, u32 level\) \{)\s*if \(level == 0 && info\.num_levels == 1\) \{[\s\S]*?\}"
           content = re.sub(old_tileshift, r"\1", content)
 
+          # 修改 3: static_assert 缩减
           old_asserts = r"static_assert\(CalculateLevelSize\(LevelInfo\{\{32, 32, 1\}, \{0, 0, 4\}, \{1, 1\}, 4, 0, 1\}, 0\) == 0x40000\);\s*static_assert\(CalculateLevelSize\(LevelInfo\{\{128, 8, 1\}, \{0, 4, 0\}, \{1, 1\}, 4, 0, 1\}, 0\) == 0x40000\);"
           new_assert = "static_assert(CalculateLevelSize(LevelInfo{{32, 32, 1}, {0, 0, 4}, {1, 1}, 4, 0}, 0) == 0x4000);"
           content = re.sub(old_asserts, new_assert, content)
 
           with open(file_path, 'w', encoding='utf-8') as f:
               f.write(content)
+          print("Android patch applied successfully.")
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -65,10 +70,10 @@ jobs:
         run: |
           chmod +x .ci/android/build.sh
           export ANDROID_SDK_ROOT=$ANDROID_HOME
-          # 修复点：显式传递 Vulkan 相关的 CMake 定义，防止 Missing VulkanHeaders
-          # 同时保留你要求的 -DYUZU_ANDROID_ARGS 语法
-          export YUZU_ANDROID_EXTRA_CMAKE_ARGS="-DVulkan_INCLUDE_DIR=$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include"
-          .ci/android/build.sh -r -t standard -b Release -DYUZU_ANDROID_ARGS="-DANDROID_ABI=arm64-v8a $YUZU_ANDROID_EXTRA_CMAKE_ARGS"
+          # 关键点：定位 NDK 内部自带的 Vulkan 头文件，强制 CMake 引用
+          VULKAN_HEADERS="$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include"
+          # 修正语法：-D 模式
+          .ci/android/build.sh -r -t standard -b Release -DYUZU_ANDROID_ARGS="-DANDROID_ABI=arm64-v8a -DVulkan_INCLUDE_DIR=$VULKAN_HEADERS -DVulkan_HEADERS_INSTALL_DIR=$VULKAN_HEADERS"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
@@ -92,25 +97,32 @@ jobs:
           subprocess.run(["git", "remote", "add", "upstream", "https://git.eden-emu.dev/eden-emu/eden.git"])
           subprocess.run(["git", "fetch", "upstream"])
           subprocess.run(["git", "reset", "--hard", "upstream/master"])
-          # 此处保持与 Android 相同的代码修改逻辑...
+          
           file_path = 'src/video_core/texture_cache/util.cpp'
           with open(file_path, 'r', encoding='utf-8') as f:
               content = f.read()
+
           content = re.sub(r"\.depth = level == 0 && num_levels == 1\s*\?\s*block_size\.depth\s*:\s*AdjustMipBlockSize<GOB_SIZE_Z>\(num_tiles\.depth, block_size\.depth, level\),", ".depth = AdjustMipBlockSize<GOB_SIZE_Z>(num_tiles.depth, block_size.depth, level),", content)
           content = re.sub(r"(constexpr Extent3D TileShift\(const LevelInfo& info, u32 level\) \{)\s*if \(level == 0 && info\.num_levels == 1\) \{[\s\S]*?\}", r"\1", content)
           content = re.sub(r"static_assert\(CalculateLevelSize\(LevelInfo\{\{32, 32, 1\}, \{0, 0, 4\}, \{1, 1\}, 4, 0, 1\}, 0\) == 0x40000\);\s*static_assert\(CalculateLevelSize\(LevelInfo\{\{128, 8, 1\}, \{0, 4, 0\}, \{1, 1\}, 4, 0, 1\}, 0\) == 0x40000\);", "static_assert(CalculateLevelSize(LevelInfo{{32, 32, 1}, {0, 0, 4}, {1, 1}, 4, 0}, 0) == 0x4000);", content)
+
           with open(file_path, 'w', encoding='utf-8') as f:
               f.write(content)
 
-      - name: Install Dependencies & Vulkan
+      - name: Install NASM
+        run: choco install nasm -y
+
+      - name: Install Vulkan SDK
         shell: pwsh
         run: |
-          choco install nasm -y
-          # 修正 Windows 脚本调用路径
+          # 确保脚本路径存在并绕过策略运行
           if (Test-Path "tools/windows/install-vulkan-sdk.ps1") {
-              powershell -ExecutionPolicy Bypass -File tools/windows/install-vulkan-sdk.ps1
+              Set-ExecutionPolicy Bypass -Scope Process -Force
+              & ./tools/windows/install-vulkan-sdk.ps1
+          } else {
+              Write-Host "Vulkan SDK script not found, relying on system environment..."
           }
-          # 手动导出路径以确保下个步骤可用
+          # 手动持久化路径
           "VULKAN_SDK=C:\VulkanSDK\1.3.275.0" >> $env:GITHUB_ENV
           "C:\VulkanSDK\1.3.275.0\Bin" >> $env:GITHUB_PATH
 
