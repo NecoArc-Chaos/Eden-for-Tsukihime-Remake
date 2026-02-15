@@ -37,14 +37,21 @@ jobs:
           with open(file_path, 'r', encoding='utf-8') as f:
               content = f.read()
 
-          # --- 修改 1: .depth 赋值 (精确匹配原始多行缩进) ---
+          # --- 修改 1: .depth 赋值 (第 126-128 行) ---
+          # 注意：这里的缩进必须与你提供的源码完全一致（通常是 21 个空格或特定的 tab）
           old_depth = """.depth = level == 0 && num_levels == 1
                      ? block_size.depth
                      : AdjustMipBlockSize<GOB_SIZE_Z>(num_tiles.depth, block_size.depth, level),"""
+          
           new_depth = ".depth = AdjustMipBlockSize<GOB_SIZE_Z>(num_tiles.depth, block_size.depth, level),"
-          content = content.replace(old_depth, new_depth)
+          
+          if old_depth in content:
+              content = content.replace(old_depth, new_depth)
+              print("Step 1: .depth patch applied.")
+          else:
+              print("Step 1 Warning: Could not find exact match for .depth block.")
 
-          # --- 修改 2: 删除 TileShift 内部的 if 块 (精确匹配原始代码块) ---
+          # --- 修改 2: 删除 TileShift 内部的 if 块 (第 171-179 行) ---
           old_if_block = """    if (level == 0 && info.num_levels == 1) {
         return Extent3D{
             .width = info.block.width,
@@ -52,20 +59,31 @@ jobs:
             .depth = info.block.depth,
         };
     }"""
-          # 替换为空字符串，保留外部的 [[nodiscard]] constexpr Extent3D TileShift 和后续 return
-          content = content.replace(old_if_block, "")
+          
+          if old_if_block in content:
+              content = content.replace(old_if_block, "")
+              print("Step 2: TileShift if-block removed.")
+          else:
+              print("Step 2 Warning: Could not find exact match for TileShift if-block.")
 
-          # --- 修改 3: 替换 static_assert (精确匹配 1310~1312 行) ---
+          # --- 修改 3: 替换 static_assert (第 1311-1313 行) ---
+          # 包含中间的空行
           old_asserts = """static_assert(CalculateLevelSize(LevelInfo{{32, 32, 1}, {0, 0, 4}, {1, 1}, 4, 0, 1}, 0) == 0x40000);
 
 static_assert(CalculateLevelSize(LevelInfo{{128, 8, 1}, {0, 4, 0}, {1, 1}, 4, 0, 1}, 0) == 0x40000);"""
+          
           new_assert = "static_assert(CalculateLevelSize(LevelInfo{{32, 32, 1}, {0, 0, 4}, {1, 1}, 4, 0}, 0) == 0x4000);"
-          content = content.replace(old_asserts, new_assert)
+          
+          if old_asserts in content:
+              content = content.replace(old_asserts, new_assert)
+              print("Step 3: static_assert updated.")
+          else:
+              print("Step 3 Warning: Could not find exact match for static_asserts.")
 
           with open(file_path, 'w', encoding='utf-8') as f:
               f.write(content)
           
-          print("SUCCESS: Surgical patch applied using exact string matching.")
+          print("SUCCESS: All patches processed.")
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -107,24 +125,25 @@ static_assert(CalculateLevelSize(LevelInfo{{128, 8, 1}, {0, 4, 0}, {1, 1}, 4, 0,
           with open(file_path, 'r', encoding='utf-8') as f:
               content = f.read()
 
-          # 修改 1 (同上)
-          content = content.replace(""".depth = level == 0 && num_levels == 1
+          # 逻辑与 Android 完全一致
+          old_depth = """.depth = level == 0 && num_levels == 1
                      ? block_size.depth
-                     : AdjustMipBlockSize<GOB_SIZE_Z>(num_tiles.depth, block_size.depth, level),""", ".depth = AdjustMipBlockSize<GOB_SIZE_Z>(num_tiles.depth, block_size.depth, level),")
+                     : AdjustMipBlockSize<GOB_SIZE_Z>(num_tiles.depth, block_size.depth, level),"""
+          content = content.replace(old_depth, ".depth = AdjustMipBlockSize<GOB_SIZE_Z>(num_tiles.depth, block_size.depth, level),")
           
-          # 修改 2 (同上)
-          content = content.replace("""    if (level == 0 && info.num_levels == 1) {
+          old_if_block = """    if (level == 0 && info.num_levels == 1) {
         return Extent3D{
             .width = info.block.width,
             .height = info.block.height,
             .depth = info.block.depth,
         };
-    }""", "")
+    }"""
+          content = content.replace(old_if_block, "")
           
-          # 修改 3 (同上)
-          content = content.replace("""static_assert(CalculateLevelSize(LevelInfo{{32, 32, 1}, {0, 0, 4}, {1, 1}, 4, 0, 1}, 0) == 0x40000);
+          old_asserts = """static_assert(CalculateLevelSize(LevelInfo{{32, 32, 1}, {0, 0, 4}, {1, 1}, 4, 0, 1}, 0) == 0x40000);
 
-static_assert(CalculateLevelSize(LevelInfo{{128, 8, 1}, {0, 4, 0}, {1, 1}, 4, 0, 1}, 0) == 0x40000);""", "static_assert(CalculateLevelSize(LevelInfo{{32, 32, 1}, {0, 0, 4}, {1, 1}, 4, 0}, 0) == 0x4000);")
+static_assert(CalculateLevelSize(LevelInfo{{128, 8, 1}, {0, 4, 0}, {1, 1}, 4, 0, 1}, 0) == 0x40000);"""
+          content = content.replace(old_asserts, "static_assert(CalculateLevelSize(LevelInfo{{32, 32, 1}, {0, 0, 4}, {1, 1}, 4, 0}, 0) == 0x4000);")
 
           with open(file_path, 'w', encoding='utf-8') as f:
               f.write(content)
