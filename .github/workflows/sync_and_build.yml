@@ -1,100 +1,52 @@
-name: Eden Custom Multi-Platform Build
+name: Eden Triple-Path Build Test
 
 on:
   push:
-    branches:
-      - main
-      - master
+    branches: [ main, master ]
   workflow_dispatch:
 
 jobs:
-  # --- Android ARM64 Build ---
-  build-android:
+  # --- 1. 安卓：替换字法 (Patch Method) ---
+  android-patch-build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           submodules: recursive
           fetch-depth: 0
 
-      - name: Install Build Dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y glslang-tools ccache
+      - name: Install glslangValidator
+        run: sudo apt-get update && sudo apt-get install -y glslang-tools ccache
 
-      - name: Sync and Surgical Patch (Android)
+      - name: Sync and Apply Python Patch
         shell: python
         run: |
           import os, subprocess
-
-          # 1. 同步并重置到最新上游
+          # 同步上游
           subprocess.run(["git", "remote", "add", "upstream", "https://git.eden-emu.dev/eden-emu/eden.git"])
           subprocess.run(["git", "fetch", "upstream"])
           subprocess.run(["git", "reset", "--hard", "upstream/master"])
 
-          file_path = 'src/video_core/texture_cache/util.cpp'
-          with open(file_path, 'r', encoding='utf-8') as f:
+          path = 'src/video_core/texture_cache/util.cpp'
+          with open(path, 'r', encoding='utf-8') as f:
               content = f.read()
 
-          # --- 修改 1: .depth 赋值 (基于你提供的源码精确匹配) ---
-          # 缩进说明：.depth 前有 8 个空格，? 和 : 前有 21 个空格
-          old_depth = (
-              "        .depth = level == 0 && num_levels == 1\n"
-              "                     ? block_size.depth\n"
-              "                     : AdjustMipBlockSize<GOB_SIZE_Z>(num_tiles.depth, block_size.depth, level),"
-          )
-          new_depth = "        .depth = AdjustMipBlockSize<GOB_SIZE_Z>(num_tiles.depth, block_size.depth, level),"
-          
-          if old_depth in content:
-              content = content.replace(old_depth, new_depth)
-              print("Step 1: .depth patch applied.")
-          else:
-              print("Step 1 Warning: Could not find exact match for .depth block. Please check indentation.")
+          # 修改 1: .depth (精确匹配缩进)
+          old_depth = ".depth = level == 0 && num_levels == 1\n                     ? block_size.depth\n                     : AdjustMipBlockSize<GOB_SIZE_Z>(num_tiles.depth, block_size.depth, level),"
+          new_depth = ".depth = AdjustMipBlockSize<GOB_SIZE_Z>(num_tiles.depth, block_size.depth, level),"
+          content = content.replace(old_depth, new_depth)
 
-          # --- 修改 2: 删除 TileShift 内部的 if 块 (精确匹配) ---
-          # 缩进说明：if 4格, return 8格, .width 12格
-          old_if_block = (
-              "    if (level == 0 && info.num_levels == 1) {\n"
-              "        return Extent3D{\n"
-              "            .width = info.block.width,\n"
-              "            .height = info.block.height,\n"
-              "            .depth = info.block.depth,\n"
-              "        };\n"
-              "    }\n"
-          )
-          # 注意：这里我们匹配带末尾换行符的块，直接删掉它
-          if old_if_block in content:
-              content = content.replace(old_if_block, "")
-              print("Step 2: TileShift if-block removed.")
-          else:
-              # 如果带换行的没匹配到，尝试不带换行的（防止文件末尾差异）
-              if old_if_block.strip() in content:
-                  content = content.replace(old_if_block.strip(), "")
-                  print("Step 2: TileShift if-block removed (trimmed).")
+          # 修改 2: TileShift If 块
+          old_if = "    if (level == 0 && info.num_levels == 1) {\n        return Extent3D{\n            .width = info.block.width,\n            .height = info.block.height,\n            .depth = info.block.depth,\n        };\n    }"
+          content = content.replace(old_if, "")
 
-          # --- 修改 3: 替换 static_assert (精确匹配) ---
-          # 包含中间的一个空行
-          old_asserts = (
-              "static_assert(CalculateLevelSize(LevelInfo{{32, 32, 1}, {0, 0, 4}, {1, 1}, 4, 0, 1}, 0) == 0x40000);\n"
-              "\n"
-              "static_assert(CalculateLevelSize(LevelInfo{{128, 8, 1}, {0, 4, 0}, {1, 1}, 4, 0, 1}, 0) == 0x40000);"
-          )
+          # 修改 3: static_assert
+          old_asserts = "static_assert(CalculateLevelSize(LevelInfo{{32, 32, 1}, {0, 0, 4}, {1, 1}, 4, 0, 1}, 0) == 0x40000);\n\nstatic_assert(CalculateLevelSize(LevelInfo{{128, 8, 1}, {0, 4, 0}, {1, 1}, 4, 0, 1}, 0) == 0x40000);"
           new_assert = "static_assert(CalculateLevelSize(LevelInfo{{32, 32, 1}, {0, 0, 4}, {1, 1}, 4, 0}, 0) == 0x4000);"
-          
-          if old_asserts in content:
-              content = content.replace(old_asserts, new_assert)
-              print("Step 3: static_assert updated.")
+          content = content.replace(old_asserts, new_assert)
 
-          with open(file_path, 'w', encoding='utf-8', newline='\n') as f:
+          with open(path, 'w', encoding='utf-8', newline='\n') as f:
               f.write(content)
-          print("SUCCESS: Patch processed.")
-
-      - name: Set up JDK 17
-        uses: actions/setup-java@v4
-        with:
-          java-version: '17'
-          distribution: 'temurin'
 
       - name: Build Android
         run: |
@@ -106,49 +58,65 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: Eden-Android-ARM64
+          name: Android-Patch-Method
           path: artifacts/*.apk
 
-  # --- Windows x64 Build ---
-  build-windows:
-    runs-on: windows-2022
+  # --- 2. 安卓：替换文件法 (File Replace Method) ---
+  android-file-replace-build:
+    runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           submodules: recursive
 
-      - name: Sync and Surgical Patch (Windows)
-        shell: python
+      - name: Install glslangValidator
+        run: sudo apt-get update && sudo apt-get install -y glslang-tools
+
+      - name: Sync and Replace File
         run: |
-          import os, subprocess
-          subprocess.run(["git", "remote", "add", "upstream", "https://git.eden-emu.dev/eden-emu/eden.git"])
-          subprocess.run(["git", "fetch", "upstream"])
-          subprocess.run(["git", "reset", "--hard", "upstream/master"])
+          # 备份根目录下的自定义 util.cpp 防止被同步冲掉
+          cp util.cpp util.cpp.bak
+          git remote add upstream https://git.eden-emu.dev/eden-emu/eden.git
+          git fetch upstream
+          git reset --hard upstream/master
+          # 用备份的文件覆盖目标位置
+          cp util.cpp.bak src/video_core/texture_cache/util.cpp
+          echo "File replaced using root util.cpp"
 
-          file_path = 'src/video_core/texture_cache/util.cpp'
-          with open(file_path, 'r', encoding='utf-8') as f:
-              content = f.read()
-
-          # 逻辑与 Android 完全一致，确保双平台代码同步
-          old_depth = "        .depth = level == 0 && num_levels == 1\n                     ? block_size.depth\n                     : AdjustMipBlockSize<GOB_SIZE_Z>(num_tiles.depth, block_size.depth, level),"
-          content = content.replace(old_depth, "        .depth = AdjustMipBlockSize<GOB_SIZE_Z>(num_tiles.depth, block_size.depth, level),")
-          
-          old_if_block = "    if (level == 0 && info.num_levels == 1) {\n        return Extent3D{\n            .width = info.block.width,\n            .height = info.block.height,\n            .depth = info.block.depth,\n        };\n    }\n"
-          content = content.replace(old_if_block, "")
-          
-          old_asserts = "static_assert(CalculateLevelSize(LevelInfo{{32, 32, 1}, {0, 0, 4}, {1, 1}, 4, 0, 1}, 0) == 0x40000);\n\nstatic_assert(CalculateLevelSize(LevelInfo{{128, 8, 1}, {0, 4, 0}, {1, 1}, 4, 0, 1}, 0) == 0x40000);"
-          content = content.replace(old_asserts, "static_assert(CalculateLevelSize(LevelInfo{{32, 32, 1}, {0, 0, 4}, {1, 1}, 4, 0}, 0) == 0x4000);")
-
-          with open(file_path, 'w', encoding='utf-8', newline='\n') as f:
-              f.write(content)
-
-      - name: Install NASM
-        run: choco install nasm -y
-
-      - name: Install Vulkan SDK
-        shell: pwsh
+      - name: Build Android
         run: |
+          chmod +x .ci/android/build.sh
+          export ANDROID_SDK_ROOT=$ANDROID_HOME
+          VULKAN_HEADERS="$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include"
+          .ci/android/build.sh -r -t standard -b Release -DYUZU_ANDROID_ARGS="-DANDROID_ABI=arm64-v8a -DVulkan_INCLUDE_DIR=$VULKAN_HEADERS -DVulkan_HEADERS_INSTALL_DIR=$VULKAN_HEADERS"
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Android-File-Replace-Method
+          path: artifacts/*.apk
+
+  # --- 3. Windows：替换文件法 (File Replace Method) ---
+  windows-file-replace-build:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Sync and Replace File
+        shell: bash
+        run: |
+          cp util.cpp util.cpp.bak
+          git remote add upstream https://git.eden-emu.dev/eden-emu/eden.git
+          git fetch upstream
+          git reset --hard upstream/master
+          cp util.cpp.bak src/video_core/texture_cache/util.cpp
+
+      - name: Install Dependencies
+        run: |
+          choco install nasm -y
+          # 自动安装 Vulkan SDK
           if (Test-Path "tools/windows/install-vulkan-sdk.ps1") {
               Set-ExecutionPolicy Bypass -Scope Process -Force
               & ./tools/windows/install-vulkan-sdk.ps1
@@ -156,7 +124,7 @@ jobs:
           "VULKAN_SDK=C:\VulkanSDK\1.3.275.0" >> $env:GITHUB_ENV
           "C:\VulkanSDK\1.3.275.0\Bin" >> $env:GITHUB_PATH
 
-      - name: Configure CMake
+      - name: Configure and Build
         run: |
           cmake -G "Visual Studio 17 2022" -A x64 -B build `
             -DYUZU_USE_BUNDLED_VULKAN=ON `
@@ -164,12 +132,10 @@ jobs:
             -DENABLE_QT=ON `
             -DYUZU_USE_BUNDLED_FFMPEG=ON `
             -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --config Release --parallel
 
-      - name: Build
-        run: cmake --build build --config Release --parallel
-
-      - name: Upload Windows
+      - name: Upload Exe
         uses: actions/upload-artifact@v4
         with:
-          name: Eden-Windows-x64
+          name: Windows-File-Replace-Method
           path: build/bin/Release/
