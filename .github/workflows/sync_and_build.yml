@@ -37,21 +37,23 @@ jobs:
           with open(file_path, 'r', encoding='utf-8') as f:
               content = f.read()
 
-          # --- 修改 1: .depth 赋值 (第 126-128 行) ---
-          # 使用 \n 拼接以确保 YAML 缩进不会干扰代码
+          # --- 修改 1: .depth 赋值 (基于你提供的源码精确匹配) ---
+          # 缩进说明：.depth 前有 8 个空格，? 和 : 前有 21 个空格
           old_depth = (
-              ".depth = level == 0 && num_levels == 1\n"
+              "        .depth = level == 0 && num_levels == 1\n"
               "                     ? block_size.depth\n"
               "                     : AdjustMipBlockSize<GOB_SIZE_Z>(num_tiles.depth, block_size.depth, level),"
           )
-          new_depth = ".depth = AdjustMipBlockSize<GOB_SIZE_Z>(num_tiles.depth, block_size.depth, level),"
+          new_depth = "        .depth = AdjustMipBlockSize<GOB_SIZE_Z>(num_tiles.depth, block_size.depth, level),"
           
           if old_depth in content:
               content = content.replace(old_depth, new_depth)
               print("Step 1: .depth patch applied.")
+          else:
+              print("Step 1 Warning: Could not find exact match for .depth block. Please check indentation.")
 
-          # --- 修改 2: 删除 TileShift 内部的 if 块 (第 171-179 行) ---
-          # 严格匹配你提供的 util.cpp 中的缩进
+          # --- 修改 2: 删除 TileShift 内部的 if 块 (精确匹配) ---
+          # 缩进说明：if 4格, return 8格, .width 12格
           old_if_block = (
               "    if (level == 0 && info.num_levels == 1) {\n"
               "        return Extent3D{\n"
@@ -59,16 +61,23 @@ jobs:
               "            .height = info.block.height,\n"
               "            .depth = info.block.depth,\n"
               "        };\n"
-              "    }"
+              "    }\n"
           )
-          
+          # 注意：这里我们匹配带末尾换行符的块，直接删掉它
           if old_if_block in content:
               content = content.replace(old_if_block, "")
               print("Step 2: TileShift if-block removed.")
+          else:
+              # 如果带换行的没匹配到，尝试不带换行的（防止文件末尾差异）
+              if old_if_block.strip() in content:
+                  content = content.replace(old_if_block.strip(), "")
+                  print("Step 2: TileShift if-block removed (trimmed).")
 
-          # --- 修改 3: 替换 static_assert (第 1311-1313 行) ---
+          # --- 修改 3: 替换 static_assert (精确匹配) ---
+          # 包含中间的一个空行
           old_asserts = (
-              "static_assert(CalculateLevelSize(LevelInfo{{32, 32, 1}, {0, 0, 4}, {1, 1}, 4, 0, 1}, 0) == 0x40000);\n\n"
+              "static_assert(CalculateLevelSize(LevelInfo{{32, 32, 1}, {0, 0, 4}, {1, 1}, 4, 0, 1}, 0) == 0x40000);\n"
+              "\n"
               "static_assert(CalculateLevelSize(LevelInfo{{128, 8, 1}, {0, 4, 0}, {1, 1}, 4, 0, 1}, 0) == 0x40000);"
           )
           new_assert = "static_assert(CalculateLevelSize(LevelInfo{{32, 32, 1}, {0, 0, 4}, {1, 1}, 4, 0}, 0) == 0x4000);"
@@ -77,9 +86,9 @@ jobs:
               content = content.replace(old_asserts, new_assert)
               print("Step 3: static_assert updated.")
 
-          with open(file_path, 'w', encoding='utf-8') as f:
+          with open(file_path, 'w', encoding='utf-8', newline='\n') as f:
               f.write(content)
-          print("SUCCESS: Patch complete.")
+          print("SUCCESS: Patch processed.")
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -121,17 +130,17 @@ jobs:
           with open(file_path, 'r', encoding='utf-8') as f:
               content = f.read()
 
-          # Windows 部分同步使用这种更安全的替换方式
-          old_depth = ".depth = level == 0 && num_levels == 1\n                     ? block_size.depth\n                     : AdjustMipBlockSize<GOB_SIZE_Z>(num_tiles.depth, block_size.depth, level),"
-          content = content.replace(old_depth, ".depth = AdjustMipBlockSize<GOB_SIZE_Z>(num_tiles.depth, block_size.depth, level),")
+          # 逻辑与 Android 完全一致，确保双平台代码同步
+          old_depth = "        .depth = level == 0 && num_levels == 1\n                     ? block_size.depth\n                     : AdjustMipBlockSize<GOB_SIZE_Z>(num_tiles.depth, block_size.depth, level),"
+          content = content.replace(old_depth, "        .depth = AdjustMipBlockSize<GOB_SIZE_Z>(num_tiles.depth, block_size.depth, level),")
           
-          old_if_block = "    if (level == 0 && info.num_levels == 1) {\n        return Extent3D{\n            .width = info.block.width,\n            .height = info.block.height,\n            .depth = info.block.depth,\n        };\n    }"
+          old_if_block = "    if (level == 0 && info.num_levels == 1) {\n        return Extent3D{\n            .width = info.block.width,\n            .height = info.block.height,\n            .depth = info.block.depth,\n        };\n    }\n"
           content = content.replace(old_if_block, "")
           
           old_asserts = "static_assert(CalculateLevelSize(LevelInfo{{32, 32, 1}, {0, 0, 4}, {1, 1}, 4, 0, 1}, 0) == 0x40000);\n\nstatic_assert(CalculateLevelSize(LevelInfo{{128, 8, 1}, {0, 4, 0}, {1, 1}, 4, 0, 1}, 0) == 0x40000);"
           content = content.replace(old_asserts, "static_assert(CalculateLevelSize(LevelInfo{{32, 32, 1}, {0, 0, 4}, {1, 1}, 4, 0}, 0) == 0x4000);")
 
-          with open(file_path, 'w', encoding='utf-8') as f:
+          with open(file_path, 'w', encoding='utf-8', newline='\n') as f:
               f.write(content)
 
       - name: Install NASM
