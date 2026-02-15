@@ -23,9 +23,7 @@ jobs:
       - name: Sync and Patch (Android)
         shell: python
         run: |
-          import re
-          import subprocess
-          import os
+          import re, subprocess, os
 
           # 同步最新 master 代码
           subprocess.run(["git", "remote", "add", "upstream", "https://git.eden-emu.dev/eden-emu/eden.git"])
@@ -64,17 +62,28 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      - name: Build Android (arm64-v8a)
+      # 增加 Python 环境，构建脚本需要
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Build Android (Official Script)
         run: |
-          cd src/android
-          chmod +x gradlew
-          ./gradlew assembleRelease -Pandroid.injected.abi=arm64-v8a
+          chmod +x .ci/android/build.sh
+          # 设置 SDK 路径环境变量
+          export ANDROID_SDK_ROOT=$ANDROID_HOME
+          # 使用官方脚本构建
+          # -r: Release 模式 (非 Devel)
+          # -t standard: 标准版 (非 optimized)
+          # -PYUZU_ANDROID_ARGS: 强制传递 ABI 参数，只编译 arm64-v8a
+          .ci/android/build.sh -r -t standard -b Release -PYUZU_ANDROID_ARGS="-DANDROID_ABI=arm64-v8a"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: Eden-Android-ARM64
-          path: src/android/app/build/outputs/apk/release/*.apk
+          path: artifacts/*.apk
 
   # --- Windows x64 Build ---
   build-windows:
@@ -85,11 +94,16 @@ jobs:
         with:
           submodules: recursive
 
+      # 关键修复：安装 glslang 和 nasm
+      - name: Install Dependencies
+        run: |
+          choco install nasm glslang -y
+          echo "C:\Program Files\NASM" >> $GITHUB_PATH
+
       - name: Sync and Patch (Windows)
         shell: python
         run: |
-          import re
-          import subprocess
+          import re, subprocess, os
           subprocess.run(["git", "remote", "add", "upstream", "https://git.eden-emu.dev/eden-emu/eden.git"])
           subprocess.run(["git", "fetch", "upstream"])
           subprocess.run(["git", "reset", "--hard", "upstream/master"])
@@ -98,21 +112,30 @@ jobs:
           with open(file_path, 'r', encoding='utf-8') as f:
               content = f.read()
 
-          # 修改逻辑同上 (此处为了保持 yml 简洁，重复逻辑在运行时依然有效)
           old_depth = r"\.depth = level == 0 && num_levels == 1\s*\?\s*block_size\.depth\s*:\s*AdjustMipBlockSize<GOB_SIZE_Z>\(num_tiles\.depth, block_size\.depth, level\),"
           content = re.sub(old_depth, ".depth = AdjustMipBlockSize<GOB_SIZE_Z>(num_tiles.depth, block_size.depth, level),", content)
+
           old_tileshift = r"(constexpr Extent3D TileShift\(const LevelInfo& info, u32 level\) \{)\s*if \(level == 0 && info\.num_levels == 1\) \{[\s\S]*?\}"
           content = re.sub(old_tileshift, r"\1", content)
+
           old_asserts = r"static_assert\(CalculateLevelSize\(LevelInfo\{\{32, 32, 1\}, \{0, 0, 4\}, \{1, 1\}, 4, 0, 1\}, 0\) == 0x40000\);\s*static_assert\(CalculateLevelSize\(LevelInfo\{\{128, 8, 1\}, \{0, 4, 0\}, \{1, 1\}, 4, 0, 1\}, 0\) == 0x40000\);"
           content = re.sub(old_asserts, "static_assert(CalculateLevelSize(LevelInfo{{32, 32, 1}, {0, 0, 4}, {1, 1}, 4, 0}, 0) == 0x4000);", content)
 
           with open(file_path, 'w', encoding='utf-8') as f:
               f.write(content)
 
-      - name: Configure and Build (Windows x64)
+      - name: Configure CMake
+        # 修正：PowerShell 换行符使用反引号 `
         run: |
-          cmake -G "Visual Studio 17 2022" -A x64 -B build -DYUZU_USE_BUNDLED_VULKAN=ON -DYUZU_USE_QT_WEB_ENGINE=OFF -DENABLE_QT=ON
-          cmake --build build --config Release --parallel %NUMBER_OF_PROCESSORS%
+          cmake -G "Visual Studio 17 2022" -A x64 -B build `
+            -DYUZU_USE_BUNDLED_VULKAN=ON `
+            -DYUZU_USE_QT_WEB_ENGINE=OFF `
+            -DENABLE_QT=ON `
+            -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        # 修正：移除 %NUMBER_OF_PROCESSORS%，让 CMake 自动管理并行
+        run: cmake --build build --config Release --parallel
 
       - name: Upload Windows
         uses: actions/upload-artifact@v4
