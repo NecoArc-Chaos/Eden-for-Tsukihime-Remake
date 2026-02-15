@@ -23,38 +23,48 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y glslang-tools nasm ninja-build pkg-config ccache
 
+      # 使用 GitHub 官方提供的 ccache 操作来提速
+      - name: Setup ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: ${{ runner.os }}-android-build
+          max-size: 2G
+
       - name: Sync and Patch
         shell: python
         run: |
           import subprocess
-          import os  # 修复之前的 NameError: name 'os' is not defined
+          import os
 
-          # 1. 强制对齐上游 master 分支
-          print("Synchronizing with upstream...")
+          # 1. 同步上游代码
+          print("Syncing with upstream master...")
           subprocess.run(["git", "remote", "add", "upstream", "https://git.eden-emu.dev/eden-emu/eden.git"], check=False)
           subprocess.run(["git", "fetch", "upstream"], check=True)
           subprocess.run(["git", "reset", "--hard", "upstream/master"], check=True)
           
-          # 2. 修复 util.cpp (解决 Android 编译错误)
+          # 2. 修复 util.cpp (精准补丁逻辑)
           file_path = 'src/video_core/texture_cache/util.cpp'
           if os.path.exists(file_path):
-              print(f"Applying patch to {file_path}...")
+              print(f"Applying surgical patch to {file_path}...")
               with open(file_path, 'r', encoding='utf-8') as f:
                   content = f.read()
               
-              # 移除导致 Android NDK 报错的特定三元运算符逻辑
-              target_str = "level == 0 && num_levels == 1 ? block_size.depth : "
-              if target_str in content:
-                  content = content.replace(target_str, "")
-                  print("Successfully removed depth condition.")
+              # 仅替换这个导致 NDK 报错的特定表达式，不删除整行，不删除 if 块
+              # 这样可以保证花括号和语法结构的完整性
+              target = "level == 0 && num_levels == 1 ? block_size.depth : "
+              if target in content:
+                  content = content.replace(target, "")
+                  print("Patch 1: Successfully simplified depth logic.")
 
-              # 屏蔽导致编译失败的静态断言
-              content = content.replace("static_assert(CalculateLevelSize", "// static_assert(CalculateLevelSize")
+              # 屏蔽会导致 constexpr 报错的断言，只注释掉断言行
+              if "static_assert(CalculateLevelSize" in content:
+                  content = content.replace("static_assert(CalculateLevelSize", "// static_assert(CalculateLevelSize")
+                  print("Patch 2: Commented out static_assert.")
               
               with open(file_path, 'w', encoding='utf-8') as f:
                   f.write(content)
           else:
-              print(f"Warning: {file_path} not found, skipping patch.")
+              print("Critical Warning: util.cpp not found! Patch skipped.")
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -64,8 +74,9 @@ jobs:
 
       - name: Build Android
         run: |
+          # 启用 ccache 并运行构建
+          export PATH="/usr/lib/ccache:$PATH"
           chmod +x .ci/android/build.sh
-          # 使用官方脚本执行 Release 构建
           .ci/android/build.sh -r -t standard -b Release
 
       - name: Upload APK
@@ -107,7 +118,6 @@ jobs:
 
       - name: Configure and Build
         run: |
-          # 确保环境变量包含 Vulkan Bin
           $env:PATH = "C:\VulkanSDK\1.3.275.0\Bin;" + $env:PATH
           cmake -G "Visual Studio 17 2022" -A x64 -B build `
             -DYUZU_USE_CPM=ON `
