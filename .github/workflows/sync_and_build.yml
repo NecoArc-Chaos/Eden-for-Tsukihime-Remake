@@ -1,0 +1,75 @@
+name: Eden Android Standard Custom Build
+
+on:
+  schedule:
+    - cron: '0 0 * * *' 
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Sync from Forgejo
+        run: |
+          git remote add upstream https://git.eden-emu.dev/eden-emu/eden.git
+          git fetch upstream
+          git reset --hard upstream/main
+
+      - name: Patch util.cpp
+        shell: python
+        run: |
+          import os
+
+          file_path = 'src/video_core/texture_cache/util.cpp'
+          with open(file_path, 'r', encoding='utf-8') as f:
+              content = f.read()
+
+          # --- 修改 1: 替换 .depth 逻辑 ---
+          # 匹配从 .depth = 开始到 AdjustMipBlockSize 结束的代码块
+          import re
+          old_depth_pattern = r"\.depth = level == 0 && num_levels == 1\s*\?\s*block_size\.depth\s*:\s*AdjustMipBlockSize<GOB_SIZE_Z>\(num_tiles\.depth, block_size\.depth, level\),"
+          new_depth_code = ".depth = AdjustMipBlockSize<GOB_SIZE_Z>(num_tiles.depth, block_size.depth, level),"
+          content = re.sub(old_depth_pattern, new_depth_code, content)
+
+          # --- 修改 2: 删除 TileShift 内部的 if 块 ---
+          # 匹配 TileShift 函数头及其内部的特定 if 结构
+          old_tileshift_if = r"(constexpr Extent3D TileShift\(const LevelInfo& info, u32 level\) \{)\s*if \(level == 0 && info\.num_levels == 1\) \{[\s\S]*?\}"
+          # 只保留函数头，删掉后续的 if 块
+          content = re.sub(old_tileshift_if, r"\1", content)
+
+          # --- 修改 3: 修改 static_assert ---
+          # 替换第一行 assert，并删除第二行
+          old_asserts = r"static_assert\(CalculateLevelSize\(LevelInfo\{\{32, 32, 1\}, \{0, 0, 4\}, \{1, 1\}, 4, 0, 1\}, 0\) == 0x40000\);\s*static_assert\(CalculateLevelSize\(LevelInfo\{\{128, 8, 1\}, \{0, 4, 0\}, \{1, 1\}, 4, 0, 1\}, 0\) == 0x40000\);"
+          new_assert = "static_assert(CalculateLevelSize(LevelInfo{{32, 32, 1}, {0, 0, 4}, {1, 1}, 4, 0}, 0) == 0x4000);"
+          content = re.sub(old_asserts, new_assert, content)
+
+          with open(file_path, 'w', encoding='utf-8') as f:
+              f.write(content)
+          print("Patch applied successfully.")
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Build Android Standard Release
+        run: |
+          cd src/android
+          chmod +x gradlew
+          # 使用标准 Release 构建方案
+          ./gradlew assembleRelease
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Eden-Standard-Custom
+          path: src/android/app/build/outputs/apk/release/*.apk
