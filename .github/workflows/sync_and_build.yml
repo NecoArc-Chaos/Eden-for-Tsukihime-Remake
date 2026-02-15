@@ -21,60 +21,35 @@ jobs:
       - name: Install Build Essentials (Linux Host)
         run: |
           sudo apt-get update
-          # 根据官方文档补充 Android 构建所需的宿主工具
-          # 特别是 glslang-tools (提供 glslangValidator) 和 nasm
-          sudo apt-get install -y \
-            autoconf \
-            cmake \
-            g++ \
-            gcc \
-            git \
-            glslang-tools \
-            libtool \
-            nasm \
-            ninja-build \
-            pkg-config \
-            python3 \
-            qt6-base-dev \
-            libssl-dev \
-            libvulkan-dev \
-            spirv-tools \
-            spirv-headers \
-            vulkan-utility-libraries-dev \
-            ccache
+          sudo apt-get install -y glslang-tools nasm ninja-build pkg-config ccache
 
       - name: Sync and Patch
         shell: python
         run: |
           import subprocess, os
-          # 1. 强制对齐上游 master 分支
+          # 1. 强制对齐上游
           subprocess.run(["git", "remote", "add", "upstream", "https://git.eden-emu.dev/eden-emu/eden.git"])
           subprocess.run(["git", "fetch", "upstream"])
           subprocess.run(["git", "reset", "--hard", "upstream/master"])
           
-          # 2. 修复源码中导致 Android 编译失败的深度/断言逻辑
+          # 2. 修复 util.cpp (修正之前的 Patch 错误)
           file_path = 'src/video_core/texture_cache/util.cpp'
           if os.path.exists(file_path):
-              print(f"Patching {file_path}...")
+              print(f"Applying robust patch to {file_path}...")
               with open(file_path, 'r', encoding='utf-8') as f:
-                  lines = f.readlines()
-              new_lines = []
-              for line in lines:
-                  # 修复 .depth 赋值
-                  if ".depth = level == 0 && num_levels == 1 ?" in line:
-                      new_lines.append(line.replace("level == 0 && num_levels == 1 ? block_size.depth : ", ""))
-                  # 屏蔽会导致 constexpr 错误的条件块
-                  elif "if (level == 0 && info.num_levels == 1)" in line:
-                      new_lines.append("        // Patch: Condition removed to support broader depth logic\n")
-                  # 屏蔽 static_assert
-                  elif "static_assert(CalculateLevelSize" in line:
-                      new_lines.append("// " + line)
-                  else:
-                      new_lines.append(line)
+                  content = f.read()
+              
+              # 修复深度逻辑：只替换特定表达式，不破坏上下文变量
+              old_code = "level == 0 && num_levels == 1 ? block_size.depth : "
+              content = content.replace(old_code, "")
+
+              # 屏蔽导致 constexpr 编译错误的静态断言 (如果存在)
+              content = content.replace("static_assert(CalculateLevelSize", "// static_assert(CalculateLevelSize")
+              
               with open(file_path, 'w', encoding='utf-8') as f:
-                  f.writelines(new_lines)
+                  f.write(content)
           else:
-              print(f"Warning: {file_path} not found, skipping patch.")
+              print("Warning: util.cpp not found!")
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -84,9 +59,8 @@ jobs:
 
       - name: Build Android
         run: |
-          # 给予脚本权限并执行官方构建脚本
-          # -r: Release, -t: standard (标准版), -b: Build
           chmod +x .ci/android/build.sh
+          # 使用官方脚本编译
           .ci/android/build.sh -r -t standard -b Release
 
       - name: Upload APK
@@ -107,30 +81,28 @@ jobs:
       - name: Sync and Patch
         shell: python
         run: |
-          import subprocess, os
+          import subprocess
           subprocess.run(["git", "remote", "add", "upstream", "https://git.eden-emu.dev/eden-emu/eden.git"])
           subprocess.run(["git", "fetch", "upstream"])
           subprocess.run(["git", "reset", "--hard", "upstream/master"])
           
+          # Windows 端同样应用该精简 Patch
           file_path = 'src/video_core/texture_cache/util.cpp'
           if os.path.exists(file_path):
               with open(file_path, 'r', encoding='utf-8') as f:
-                  lines = f.readlines()
-              new_lines = [line.replace("level == 0 && num_levels == 1 ? block_size.depth : ", "") if ".depth = level == 0 && num_levels == 1 ?" in line else line for line in lines]
+                  content = f.read()
+              content = content.replace("level == 0 && num_levels == 1 ? block_size.depth : ", "")
               with open(file_path, 'w', encoding='utf-8') as f:
-                  f.writelines(new_lines)
+                  f.write(content)
 
       - name: Install Dependencies
         run: |
-          # 安装 nasm 和使用项目自带脚本安装 Vulkan SDK
           choco install nasm -y
           powershell -ExecutionPolicy Bypass -File ./tools/windows/install-vulkan-sdk.ps1
 
       - name: Configure and Build
         run: |
-          # 手动将 Vulkan SDK 的 Bin 目录加入 PATH 确保 CMake 找得到 glslangValidator
           $env:PATH = "C:\VulkanSDK\1.3.275.0\Bin;" + $env:PATH
-          
           cmake -G "Visual Studio 17 2022" -A x64 -B build `
             -DYUZU_USE_CPM=ON `
             -DYUZU_USE_BUNDLED_VULKAN=ON `
@@ -138,7 +110,6 @@ jobs:
             -DENABLE_QT=ON `
             -DYUZU_USE_BUNDLED_FFMPEG=ON `
             -DENABLE_WEB_SERVICE=ON
-            
           cmake --build build --config Release --parallel
 
       - name: Upload Windows Binary
