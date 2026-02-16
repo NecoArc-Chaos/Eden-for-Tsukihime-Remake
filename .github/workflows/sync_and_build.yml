@@ -1,4 +1,4 @@
-name: Eden Triple-Path Build Test
+name: Eden Direct File Replace Build
 
 on:
   push:
@@ -6,82 +6,46 @@ on:
   workflow_dispatch:
 
 jobs:
-  # --- 1. 安卓：替换字法 (Patch Method) ---
-  android-patch-build:
+  # --- 1. Android ARM64 构建 ---
+  build-android:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout Your Repo
+        uses: actions/checkout@v4
         with:
           submodules: recursive
           fetch-depth: 0
 
-      - name: Install glslangValidator
+      - name: Install Dependencies
         run: sudo apt-get update && sudo apt-get install -y glslang-tools ccache
 
-      - name: Sync and Apply Python Patch
-        shell: python
+      - name: Sync Upstream and Force Replace
         run: |
-          import os, subprocess
-          # 同步上游
-          subprocess.run(["git", "remote", "add", "upstream", "https://git.eden-emu.dev/eden-emu/eden.git"])
-          subprocess.run(["git", "fetch", "upstream"])
-          subprocess.run(["git", "reset", "--hard", "upstream/master"])
-
-          path = 'src/video_core/texture_cache/util.cpp'
-          with open(path, 'r', encoding='utf-8') as f:
-              content = f.read()
-
-          # 修改 1: .depth (精确匹配缩进)
-          old_depth = ".depth = level == 0 && num_levels == 1\n                     ? block_size.depth\n                     : AdjustMipBlockSize<GOB_SIZE_Z>(num_tiles.depth, block_size.depth, level),"
-          new_depth = ".depth = AdjustMipBlockSize<GOB_SIZE_Z>(num_tiles.depth, block_size.depth, level),"
-          content = content.replace(old_depth, new_depth)
-
-          # 修改 2: TileShift If 块
-          old_if = "    if (level == 0 && info.num_levels == 1) {\n        return Extent3D{\n            .width = info.block.width,\n            .height = info.block.height,\n            .depth = info.block.depth,\n        };\n    }"
-          content = content.replace(old_if, "")
-
-          # 修改 3: static_assert
-          old_asserts = "static_assert(CalculateLevelSize(LevelInfo{{32, 32, 1}, {0, 0, 4}, {1, 1}, 4, 0, 1}, 0) == 0x40000);\n\nstatic_assert(CalculateLevelSize(LevelInfo{{128, 8, 1}, {0, 4, 0}, {1, 1}, 4, 0, 1}, 0) == 0x40000);"
-          new_assert = "static_assert(CalculateLevelSize(LevelInfo{{32, 32, 1}, {0, 0, 4}, {1, 1}, 4, 0}, 0) == 0x4000);"
-          content = content.replace(old_asserts, new_assert)
-
-          with open(path, 'w', encoding='utf-8', newline='\n') as f:
-              f.write(content)
-
-      - name: Build Android
-        run: |
-          chmod +x .ci/android/build.sh
-          export ANDROID_SDK_ROOT=$ANDROID_HOME
-          VULKAN_HEADERS="$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include"
-          .ci/android/build.sh -r -t standard -b Release -DYUZU_ANDROID_ARGS="-DANDROID_ABI=arm64-v8a -DVulkan_INCLUDE_DIR=$VULKAN_HEADERS -DVulkan_HEADERS_INSTALL_DIR=$VULKAN_HEADERS"
-
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: Android-Patch-Method
-          path: artifacts/*.apk
-
-  # --- 2. 安卓：替换文件法 (File Replace Method) ---
-  android-file-replace-build:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: recursive
-
-      - name: Install glslangValidator
-        run: sudo apt-get update && sudo apt-get install -y glslang-tools
-
-      - name: Sync and Replace File
-        run: |
-          # 备份根目录下的自定义 util.cpp 防止被同步冲掉
-          cp util.cpp util.cpp.bak
+          # 1. 备份根目录下你那份正确的 util.cpp
+          cp util.cpp util.cpp.correct
+          
+          # 2. 强制同步上游代码
           git remote add upstream https://git.eden-emu.dev/eden-emu/eden.git
           git fetch upstream
           git reset --hard upstream/master
-          # 用备份的文件覆盖目标位置
-          cp util.cpp.bak src/video_core/texture_cache/util.cpp
-          echo "File replaced using root util.cpp"
+          
+          # 3. 强制覆盖到目标路径
+          mkdir -p src/video_core/texture_cache/
+          cp -f util.cpp.correct src/video_core/texture_cache/util.cpp
+          
+          # 4. 【关键校验】在日志中打印修改点的代码片段，确保替换成功
+          echo "==== 校验修改点 1: .depth ===="
+          sed -n '120,135p' src/video_core/texture_cache/util.cpp
+          echo "==== 校验修改点 2: TileShift ===="
+          sed -n '165,185p' src/video_core/texture_cache/util.cpp
+          echo "==== 校验修改点 3: static_assert ===="
+          tail -n 20 src/video_core/texture_cache/util.cpp
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
 
       - name: Build Android
         run: |
@@ -90,33 +54,36 @@ jobs:
           VULKAN_HEADERS="$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include"
           .ci/android/build.sh -r -t standard -b Release -DYUZU_ANDROID_ARGS="-DANDROID_ABI=arm64-v8a -DVulkan_INCLUDE_DIR=$VULKAN_HEADERS -DVulkan_HEADERS_INSTALL_DIR=$VULKAN_HEADERS"
 
-      - name: Upload APK
+      - name: Upload Android APK
         uses: actions/upload-artifact@v4
         with:
-          name: Android-File-Replace-Method
+          name: Eden-Android-Final
           path: artifacts/*.apk
 
-  # --- 3. Windows：替换文件法 (File Replace Method) ---
-  windows-file-replace-build:
+  # --- 2. Windows x64 构建 ---
+  build-windows:
     runs-on: windows-2022
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout Your Repo
+        uses: actions/checkout@v4
         with:
           submodules: recursive
 
-      - name: Sync and Replace File
+      - name: Sync and Force Replace
         shell: bash
         run: |
-          cp util.cpp util.cpp.bak
+          cp util.cpp util.cpp.correct
           git remote add upstream https://git.eden-emu.dev/eden-emu/eden.git
           git fetch upstream
           git reset --hard upstream/master
-          cp util.cpp.bak src/video_core/texture_cache/util.cpp
+          cp -f util.cpp.correct src/video_core/texture_cache/util.cpp
+          
+          echo "==== Windows 校验修改点 ===="
+          sed -n '120,135p' src/video_core/texture_cache/util.cpp
 
-      - name: Install Dependencies
+      - name: Install Build Tools
         run: |
           choco install nasm -y
-          # 自动安装 Vulkan SDK
           if (Test-Path "tools/windows/install-vulkan-sdk.ps1") {
               Set-ExecutionPolicy Bypass -Scope Process -Force
               & ./tools/windows/install-vulkan-sdk.ps1
@@ -134,8 +101,8 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release
           cmake --build build --config Release --parallel
 
-      - name: Upload Exe
+      - name: Upload Windows Exe
         uses: actions/upload-artifact@v4
         with:
-          name: Windows-File-Replace-Method
+          name: Eden-Windows-Final
           path: build/bin/Release/
