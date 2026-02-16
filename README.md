@@ -1,42 +1,44 @@
 # Eden-for-Tsukihime-Remake
 
-通过Aphcity大佬提供的方法 (https://b23.tv/jXFjBj7) 建立了自动构建，适用于**无贴图错误**游玩月姬R  
+通过Aphcity大佬提供的方法 (<https://b23.tv/jXFjBj7>) 建立了自动构建，适用于**无贴图错误**游玩月姬R  
 *可能不适用于玩TotK*  
+
+---
 
 **文件获取：**  
 找到上面的Action  
 进入并点进最新构建  
 在下面有自动构建产物  
+下载下来是zip文件  
+解压后直接安装就行  
+
+---
+
+意义:  
+
+- 性能更高，Mali支持更强  
+- 修复了月姬R等某些2D游戏的贴图错误  
 
 本人小白，全程使用Gemini 3  
-计划构建安卓arm64-v8a版本和windows x86-64版本
-其他需求自己去构建吧～  
+只构建了安卓arm64-v8a版本和windows x86-64版本  
+使用了文件替换的方式，修改完的文件就在储存库里  
+有其他需求可以自行构建～  
 
 **Windows端**也建议使用我狐哥打包的
 不用手动安装密钥固件和游戏
 进月R贴吧群获取→677426945
 
-参考文档: 
-https://git.eden-emu.dev/eden-emu/eden/src/branch/master/docs/Build.md
-
-意义:   
-- 性能更高，Mali支持更强  
-- 修复了月姬R等某些2D游戏的贴图错误  
-
----
-
-**目前的构建产物还不能实现无贴图错误，请耐心等待……**  
-
----
-
 注意版本号可能并不匹配实际版本  
 反正构建都是拉取上游最新的更新  
 
-
 不要点击应用内提示的更新新版本！  
 
+---
 
-## 文件修改参考：  
+参考文档:
+<https://git.eden-emu.dev/eden-emu/eden/src/branch/master/docs/Build.md>
+
+## 文件修改参考
 
 - src/video_core/texture_cache/util.cpp  
 把大约在126行的代码  

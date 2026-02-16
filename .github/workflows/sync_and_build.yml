@@ -6,62 +6,8 @@ on:
   workflow_dispatch:
 
 jobs:
-  # --- 1. 安卓：替换字法 (Patch Method) ---
-  # 这一路用于验证如果 Python 脚本修改，结果是否一致
-  android-patch-build:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: recursive
-          fetch-depth: 0
-
-      - name: Install glslangValidator
-        run: sudo apt-get update && sudo apt-get install -y glslang-tools ccache
-
-      - name: Sync and Apply Python Patch
-        shell: python
-        run: |
-          import os, subprocess
-          # 同步上游
-          subprocess.run(["git", "remote", "add", "upstream", "https://git.eden-emu.dev/eden-emu/eden.git"])
-          subprocess.run(["git", "fetch", "upstream"])
-          subprocess.run(["git", "reset", "--hard", "upstream/master"])
-
-          path = 'src/video_core/texture_cache/util.cpp'
-          with open(path, 'r', encoding='utf-8') as f:
-              content = f.read()
-
-          # 修改 1: .depth (去除 level == 0 判断)
-          old_depth = ".depth = level == 0 && num_levels == 1\n                     ? block_size.depth\n                     : AdjustMipBlockSize<GOB_SIZE_Z>(num_tiles.depth, block_size.depth, level),"
-          new_depth = ".depth = AdjustMipBlockSize<GOB_SIZE_Z>(num_tiles.depth, block_size.depth, level),"
-          content = content.replace(old_depth, new_depth)
-
-          # 修改 2: TileShift If 块
-          import re
-          content = re.sub(r'if \(level == 0 && info\.num_levels == 1\) \{.*?\}', '', content, flags=re.DOTALL)
-
-          # 修改 3: static_assert
-          content = re.sub(r'static_assert\(CalculateLevelSize\(LevelInfo\{\{32, 32, 1\}, \{0, 0, 4\}, \{1, 1\}, 4, 0, 1\}, 0\) == 0x40000\);', 
-                           'static_assert(CalculateLevelSize(LevelInfo{{32, 32, 1}, {0, 0, 4}, {1, 1}, 4, 0}, 0) == 0x4000);', content)
-
-          with open(path, 'w', encoding='utf-8', newline='\n') as f:
-              f.write(content)
-
-      - name: Build Android
-        run: |
-          chmod +x .ci/android/build.sh
-          export ANDROID_SDK_ROOT=$ANDROID_HOME
-          VULKAN_HEADERS="$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include"
-          .ci/android/build.sh -r -t standard -b Release -DYUZU_ANDROID_ARGS="-DANDROID_ABI=arm64-v8a -DVulkan_INCLUDE_DIR=$VULKAN_HEADERS -DVulkan_HEADERS_INSTALL_DIR=$VULKAN_HEADERS"
-
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: Android-Patch-Method
-          path: artifacts/*.apk
-
-  # --- 2. 安卓：本地文件覆盖法 (File Replace Method) ---
+  
+  # --- 1. 安卓：本地文件覆盖法 (File Replace Method) ---
   # 这一路直接把你根目录那个修改好的 util.cpp 强行塞进去
   android-file-replace-build:
     runs-on: ubuntu-latest
@@ -96,7 +42,7 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: Android-File-Replace-Method
+          name: Android-APK
           path: artifacts/*.apk
 
   # --- 3. Windows：本地文件覆盖法 (File Replace Method) ---
@@ -139,5 +85,5 @@ jobs:
       - name: Upload Exe
         uses: actions/upload-artifact@v4
         with:
-          name: Windows-File-Replace-Method
+          name: Windows-Exe
           path: build/bin/Release/
