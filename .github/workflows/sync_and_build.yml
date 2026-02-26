@@ -1,4 +1,4 @@
-name: Eden Triple-Path Final Build
+name: Eden for 月姬R 每日构建
 
 on:
   schedule:
@@ -10,7 +10,7 @@ on:
 jobs:
   
   # --- 1. 安卓：本地文件覆盖法 (File Replace Method) ---
-  # 这一路直接把你根目录那个修改好的 util.cpp 强行塞进去
+  # 这一路直接把根目录那个修改好的 util.cpp 强行塞进去
   android-file-replace-build:
     runs-on: ubuntu-latest
     steps:
@@ -44,7 +44,7 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: Android-APK
+          name: Android-apk
           path: artifacts/*.apk
 
   # --- 3. Windows：本地文件覆盖法 (File Replace Method) ---
@@ -84,8 +84,8 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release
           cmake --build build --config Release --parallel
 
-      - name: Upload Exe
+      - name: Upload exe
         uses: actions/upload-artifact@v4
         with:
-          name: Windows-Exe
+          name: Windows-zip
           path: build/bin/Release/
