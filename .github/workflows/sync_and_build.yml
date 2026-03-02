@@ -12,8 +12,7 @@ permissions:
 
 jobs:
   
-  # --- 1. 安卓：本地文件覆盖法 (File Replace Method) ---
-  # 这一路直接把根目录那个修改好的 util.cpp 强行塞进去
+  # --- 1. 安卓：本地文件覆盖法 ---
   android-file-replace-build:
     runs-on: ubuntu-latest
     steps:
@@ -26,7 +25,7 @@ jobs:
 
       - name: Sync and Force Replace
         run: |
-          # 1. 先把根目录你修改好的文件挪走备份，防止 git reset 把它删了
+          # 1. 备份根目录修改好的文件
           mv util.cpp util.cpp.bak
           # 2. 同步上游
           git remote add upstream https://git.eden-emu.dev/eden-emu/eden.git
@@ -34,7 +33,7 @@ jobs:
           git reset --hard upstream/master
           # 3. 强行覆盖目标文件
           cp -f util.cpp.bak src/video_core/texture_cache/util.cpp
-          echo "==== 验证覆盖是否成功 (查看第126行附近) ===="
+          echo "==== 验证覆盖是否成功 ===="
           sed -n '120,130p' src/video_core/texture_cache/util.cpp
 
       - name: Build Android
@@ -50,7 +49,7 @@ jobs:
           name: Android-apk
           path: artifacts/*.apk
 
-  # --- 3. Windows：本地文件覆盖法 (File Replace Method) ---
+  # --- 2. Windows：本地文件覆盖法 ---
   windows-file-replace-build:
     runs-on: windows-2022
     steps:
@@ -92,25 +91,28 @@ jobs:
         with:
           name: Windows-zip
           path: build/bin/Release/
-          
- publish-release:
-     needs: [android-file-replace-build, windows-file-replace-build] # 确保编译成功才发布
-     runs-on: ubuntu-latest
-     steps:
-       - name: Download Artifacts
-         uses: actions/download-artifact@v4 # 下载之前 job 上传的所有文件
 
-       - name: Generate Tag Name
-         run: echo "RELEASE_TAG=v$(date +'%Y.%m.%d-%H%M')" >> $GITHUB_ENV
+  # --- 3. 自动发布 Release ---
+  publish-release:
+    needs: [android-file-replace-build, windows-file-replace-build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: ./release-assets
 
-       - name: Create Release
-         uses: softprops/action-gh-release@v2
-         with:
-           tag_name: ${{ env.RELEASE_TAG }}
-           name: "Eden Custom Build ${{ env.RELEASE_TAG }}"
-           body: "Auto-generated build with custom util.cpp patches."
-           draft: false
-           prerelease: false
-           files: |
-             Android-File-Replace-Method/*.apk
-             Windows-File-Replace-Method/**
+      - name: Generate Tag Name
+        run: echo "RELEASE_TAG=v$(date +'%Y.%m.%d-%H%M')" >> $GITHUB_ENV
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: "Eden Custom Build ${{ env.RELEASE_TAG }}"
+          body: "自动生成构建，带有自定义 util.cpp 补丁。"
+          draft: false
+          prerelease: false
+          files: |
+            ./release-assets/Android-apk/*.apk
+            ./release-assets/Windows-zip/**
