@@ -93,24 +93,24 @@ jobs:
           name: Windows-zip
           path: build/bin/Release/
           
-publish-release:
-    needs: [android-file-replace-build, windows-file-replace-build] # 确保编译成功才发布
-    runs-on: ubuntu-latest
-    steps:
-      - name: Download Artifacts
-        uses: actions/download-artifact@v4 # 下载之前 job 上传的所有文件
+ publish-release:
+     needs: [android-file-replace-build, windows-file-replace-build] # 确保编译成功才发布
+     runs-on: ubuntu-latest
+     steps:
+       - name: Download Artifacts
+         uses: actions/download-artifact@v4 # 下载之前 job 上传的所有文件
 
-      - name: Generate Tag Name
-        run: echo "RELEASE_TAG=v$(date +'%Y.%m.%d-%H%M')" >> $GITHUB_ENV
+       - name: Generate Tag Name
+         run: echo "RELEASE_TAG=v$(date +'%Y.%m.%d-%H%M')" >> $GITHUB_ENV
 
-      - name: Create Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ env.RELEASE_TAG }}
-          name: "Eden Custom Build ${{ env.RELEASE_TAG }}"
-          body: "Auto-generated build with custom util.cpp patches."
-          draft: false
-          prerelease: false
-          files: |
-            Android-File-Replace-Method/*.apk
-            Windows-File-Replace-Method/**
+       - name: Create Release
+         uses: softprops/action-gh-release@v2
+         with:
+           tag_name: ${{ env.RELEASE_TAG }}
+           name: "Eden Custom Build ${{ env.RELEASE_TAG }}"
+           body: "Auto-generated build with custom util.cpp patches."
+           draft: false
+           prerelease: false
+           files: |
+             Android-File-Replace-Method/*.apk
+             Windows-File-Replace-Method/**
