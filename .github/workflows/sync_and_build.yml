@@ -102,6 +102,13 @@ jobs:
         with:
           path: ./release-assets
 
+      - name: Prepare Windows Zip
+        run: |
+          # 进入 Windows 编译出的目录，只打包需要的 exe 和关键文件
+          cd release-assets/Windows-bin
+          zip -r ../../Eden-Windows-x64.zip ./*
+          cd ../..
+
       - name: Generate Tag Name
         run: echo "RELEASE_TAG=v$(date +'%Y.%m.%d-%H%M')" >> $GITHUB_ENV
 
@@ -109,10 +116,10 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.RELEASE_TAG }}
-          name: "Eden Custom Build ${{ env.RELEASE_TAG }}"
-          body: "自动生成构建，带有自定义 util.cpp 补丁。"
+          name: "Eden for 月姬R ${{ env.RELEASE_TAG }}"
+          body: "每日自动构建版本。已替换自定义 util.cpp 以修复贴图问题。"
           draft: false
           prerelease: false
           files: |
             ./release-assets/Android-apk/*.apk
-            ./release-assets/Windows-zip/**
+            ./Eden-Windows-x64.zip
