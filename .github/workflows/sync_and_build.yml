@@ -39,61 +39,15 @@ jobs:
           name: Android-apk
           path: artifacts/*.apk
 
-  # --- 2. Windows 构建 ---
-  windows-file-replace-build:
-    runs-on: windows-2022
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: recursive
-      - name: Sync and Replace File
-        shell: bash
-        run: |
-          mv util.cpp util.cpp.bak
-          git remote add upstream https://git.eden-emu.dev/eden-emu/eden.git
-          git fetch upstream
-          git reset --hard upstream/master
-          cp -f util.cpp.bak src/video_core/texture_cache/util.cpp
-      - name: Install Build Tools
-        run: |
-          choco install nasm -y
-          if (Test-Path "tools/windows/install-vulkan-sdk.ps1") {
-              Set-ExecutionPolicy Bypass -Scope Process -Force
-              & ./tools/windows/install-vulkan-sdk.ps1
-          }
-          "VULKAN_SDK=C:\VulkanSDK\1.3.275.0" >> $env:GITHUB_ENV
-          "C:\VulkanSDK\1.3.275.0\Bin" >> $env:GITHUB_PATH
-      - name: Configure and Build
-        run: |
-          cmake -G "Visual Studio 17 2022" -A x64 -B build `
-            -DYUZU_USE_BUNDLED_VULKAN=ON `
-            -DYUZU_USE_QT_WEB_ENGINE=OFF `
-            -DENABLE_QT=ON `
-            -DYUZU_USE_BUNDLED_FFMPEG=ON `
-            -DCMAKE_BUILD_TYPE=Release
-          cmake --build build --config Release --parallel
-      - name: Upload exe
-        uses: actions/upload-artifact@v4
-        with:
-          name: Windows-bin-raw
-          path: build/bin/Release/
-
   # --- 3. 自动发布 Release ---
   publish-release:
-    needs: [android-file-replace-build, windows-file-replace-build]
+    needs: [android-file-replace-build]
     runs-on: ubuntu-latest
     steps:
       - name: Download Artifacts
         uses: actions/download-artifact@v4
         with:
           path: ./release-assets
-
-      - name: Prepare Windows Zip
-        run: |
-          # 修正路径：使用 upload 时定义的 Windows-bin-raw
-          cd release-assets/Windows-bin-raw
-          zip -r ../../Eden-Windows-x64.zip ./*
-          cd ../..
 
       - name: Generate Tag Name
         run: echo "RELEASE_TAG=v$(date +'%Y.%m.%d-%H%M')" >> $GITHUB_ENV
@@ -106,4 +60,3 @@ jobs:
           body: "每日自动构建版本。已替换自定义 util.cpp 以修复贴图问题。"
           files: |
             ./release-assets/Android-apk/*.apk
-            ./Eden-Windows-x64.zip
